@@ -1,0 +1,12 @@
+# This is a template parameter used by guic (guidon cli).
+[variables]
+project_name = "myapp"
+app_name = "myapp"
+package_id = "com.example.aki.pp.myapp"
+version_code = "1"
+version_name = "0.1.0"
+load_url = "https://example.com/"
+#
+compile_sdk_version = "36"
+target_sdk_version = "36"
+min_sdk_version = "28"
