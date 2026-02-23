@@ -1,16 +1,29 @@
 package {{package_id}}
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.webkit.JavascriptInterface
+import android.webkit.URLUtil
 import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebChromeClient
+import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.net.toUri
+import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URLDecoder
+import java.util.regex.Pattern
+import kotlin.io.encoding.Base64
+
 
 class MainActivity : ComponentActivity() {
     var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -30,6 +43,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         val myWebView: WebView = findViewById(R.id.webview)
+        //
         val webSettings: WebSettings = myWebView.settings
         webSettings.javaScriptEnabled = true
         webSettings.domStorageEnabled = true
@@ -46,13 +60,111 @@ class MainActivity : ComponentActivity() {
                     if (intent != null) {
                         fileChooserLauncher.launch(intent)
                     }
-                } catch (e: Exception) {
+                } catch (_: Exception) {
                     return false
                 }
                 return true
             }
         }
+        myWebView.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+            val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            var msg: String
+            if (url.startsWith("blob:")) {
+                val js = javascriptToParseBlobData0(url, mimeType, fileName)
+                myWebView.loadUrl(js)
+                msg = "Download done"
+            } else if (url.startsWith("data:")) {
+                saveDataUri0(url, fileName)
+                msg = "Download done"
+            } else {
+                val request = saveWithDownloadManager0(url, mimeType, fileName)
+                val downloadManager = getSystemService(DOWNLOAD_SERVICE) as DownloadManager
+                downloadManager.enqueue(request)
+                msg = "Download started"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        }
+        class AndroidBridge {
+            @Suppress("UNUSED_PARAMETER")
+            @JavascriptInterface
+            fun onDownloadBlob(base64Data: String?, mimeType: String?, fileName: String) {
+                if (base64Data != null) {
+                    saveDataUri0(base64Data, fileName)
+                }
+            }
+        }
+        myWebView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
         //
         myWebView.loadUrl("{{load_url}}")
     }
 }
+private fun javascriptToParseBlobData0(url:String, mimeType:String, fileName:String): String {
+    // JavaScript to parse Blob data
+    val js = "javascript:var xhr=new XMLHttpRequest();" +
+            "xhr.open('GET','${url}',true);" +
+            "xhr.responseType='blob';" +
+            "xhr.onload=function(e){" +
+            "var reader=new FileReader();" +
+            "reader.readAsDataURL(this.response);" +
+            "reader.onloadend=function(){" +
+            "var base64data=reader.result;" +
+            "window.AndroidBridge.onDownloadBlob(base64data,'${mimeType}','${fileName}');" +
+            "}" +
+            "};" +
+            "xhr.send();"
+    return js
+}
+private fun saveWithDownloadManager0(url: String, mimeType: String, fileName: String): DownloadManager.Request {
+    val request = DownloadManager.Request(url.toUri())
+    request.apply {
+        setTitle(fileName)
+        setDescription("Downloading file...")
+        setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+        setMimeType(mimeType)
+    }
+    return request
+}
+private fun saveDataUri0(url: String, filename: String) {
+    val destinationFile = getUniqueDownloadFile0(filename)
+    //
+    val pattern2 = Pattern.compile(";base64,")
+    val matcher2 = pattern2.matcher(url)
+    if (matcher2.find()) {
+        val blobBytes: ByteArray = Base64.Default
+            .withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
+            .decode(url.split(",")[1], 0)
+        val os = FileOutputStream(destinationFile, false)
+        os.write(blobBytes)
+        os.flush()
+        os.close()
+    } else {
+        val source = URLDecoder.decode(url, "UTF-8").replace("data:.+?,".toRegex(), "")
+        val output = BufferedOutputStream(FileOutputStream(destinationFile))
+        output.write(source.toByteArray())
+        output.flush()
+        output.close()
+    }
+}
+private fun getUniqueDownloadFile0(filename: String): File {
+    //var destinationFile = File(filename)
+    var destinationFile: File
+    val name = File(filename).nameWithoutExtension
+    val ext = File(filename).extension
+    var fnm = filename
+    var i = 0
+    do {
+        destinationFile = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                .absolutePath + "/" + fnm
+        )
+        if (destinationFile.exists()) {
+            ++i
+            fnm = "${name}-${i}.${ext}"
+            continue
+        }
+        break
+    } while (true)
+    return destinationFile
+}
+
